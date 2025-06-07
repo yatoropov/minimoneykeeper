@@ -1,26 +1,24 @@
 import os
+from dotenv import load_dotenv
 import openai
 from fastapi import FastAPI, Request
-from pydantic import BaseModel
 from telegram import Bot
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
+import json, re
+
+load_dotenv()
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 GOOGLE_SHEETS_ID = os.getenv("GOOGLE_SHEETS_ID")
-GOOGLE_SERVICE_ACCOUNT = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON")  # шлях до credentials.json
+GOOGLE_SERVICE_ACCOUNT = os.getenv("GOOGLE_SERVICE_ACCOUNT")
 
 bot = Bot(token=TELEGRAM_TOKEN)
 openai.api_key = OPENAI_API_KEY
 
 app = FastAPI()
 
-# ====== DATA CLASSES ======
-class TelegramMessage(BaseModel):
-    message: dict
-
-# ====== UTILS ======
 def ask_openai(message: str):
     prompt = f"""
 Ти — фінансовий асистент. Проаналізуй український текст і поверни поля у JSON:
@@ -45,7 +43,6 @@ def ask_openai(message: str):
         max_tokens=256
     )
     reply = completion.choices[0].message.content
-    import re, json
     match = re.search(r"\{[\s\S]*?\}", reply)
     if match:
         return json.loads(match.group())
@@ -63,7 +60,7 @@ def find_client(name, service):
     sheet = service.spreadsheets()
     result = sheet.values().get(
         spreadsheetId=GOOGLE_SHEETS_ID,
-        range="clients!A:C"  # припустимо, клієнти зберігаються тут
+        range="clients!A:C"
     ).execute()
     rows = result.get('values', [])
     for row in rows[1:]:
@@ -79,7 +76,6 @@ def get_default_service(service):
     ).execute()
     return result.get('values', [['']])[0][0]
 
-# ====== MAIN ENDPOINT ======
 @app.post("/")
 async def telegram_webhook(req: Request):
     data = await req.json()
@@ -99,15 +95,13 @@ async def telegram_webhook(req: Request):
             service = parsed.get("service") or get_default_service(gs_service)
             if not parsed.get("service"):
                 bot.send_message(chat_id, "Яке найменування послуги для рахунку/акту?")
-                # тут треба зберігати стан чату (redis, файл, dict...), щоб дочекатися відповіді
                 return {"ok": True}
 
-            # =========== Далі логіка генерації PDF (DOCX) ===============
-            # Можна підключити python-docx, згенерувати файл, зберегти в Google Drive через API
-            # або просто надіслати посилання на Google Диск
-            # Або навіть надіслати doc/pdf одразу в Telegram
-
-            bot.send_message(chat_id, f"Рахунок і акт на {parsed['client']} на суму {parsed['amount']} ({parsed['amount_words']}) створено! (PDF-лінк тут...)")
+            bot.send_message(
+                chat_id,
+                f"Рахунок і акт на {parsed['client']} на суму {parsed['amount']} ({parsed['amount_words']}) створено!\n"
+                f"Дата: {parsed['date']}\nПослуга: {service}"
+            )
         except Exception as e:
             bot.send_message(chat_id, f"Помилка: {str(e)}")
     else:
